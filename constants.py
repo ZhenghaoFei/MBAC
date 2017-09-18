@@ -20,4 +20,4 @@ GRAD_NORM_CLIP = 40.0 # gradient norm clipping
 USE_GPU = True # To use GPU, set True
 USE_LSTM = False # True for A3C LSTM, False for A3C FF
 USE_MODEL =True  # True for using model, False for not
-MODEL_LOSS = False # True for using model loss, False for not
+MODEL_LOSS = True # True for using model loss, False for not

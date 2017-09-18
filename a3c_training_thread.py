@@ -114,7 +114,6 @@ class A3CTrainingThread(object):
     for i in range(LOCAL_T_MAX):
       pi_, value_ = self.local_network.run_policy_and_value(sess, self.game_state.s_t)
       action = self.choose_action(pi_)
-
       states.append(self.game_state.s_t)
       actions.append(action)
       values.append(value_)
@@ -192,11 +191,15 @@ class A3CTrainingThread(object):
     # print("length of batch_si: ", len(batch_si))
 
     last_step.append(20)
+
     batch_nsi = last_state + batch_si   # next state batch
+    del batch_nsi[-1]
+
     steps = last_step +steps
+    del steps[-1]
 
     if MODEL_LOSS:
-      print("model_loss on")
+      # print("model_loss on")
 
       batch_nfi = self.local_network.run_feature(sess, batch_nsi)
 
@@ -206,7 +209,7 @@ class A3CTrainingThread(object):
         batch_td.reverse()
         batch_R.reverse()
         steps.reverse()
-        print steps
+        # print steps
 
         sess.run( self.apply_gradients,
                   feed_dict = {
@@ -214,20 +217,19 @@ class A3CTrainingThread(object):
                     self.local_network.a: batch_a,
                     self.local_network.td: batch_td,
                     self.local_network.r: batch_R,
+                    self.local_network.nf: batch_nfi,
                     self.local_network.initial_lstm_state: start_lstm_state,
                     self.local_network.step_size : [len(batch_a)],
                     self.learning_rate_input: cur_learning_rate } )
       else:
-        print steps
-
+        # print steps
         sess.run( self.apply_gradients,
                   feed_dict = {
                     self.local_network.s: batch_si,
                     self.local_network.a: batch_a,
                     self.local_network.td: batch_td,
                     self.local_network.r: batch_R,
-                    self.local_network.r: batch_R,
-
+                    self.local_network.nf: batch_nfi,
                     self.learning_rate_input: cur_learning_rate} )      
     else:
       if USE_LSTM:

@@ -18,54 +18,63 @@ class GameACNetwork(object):
     self._thread_index = thread_index
     self._device = device    
 
+
   def prepare_loss(self, entropy_beta):
     with tf.device(self._device):
-      # taken action (input for policy)
-      self.a = tf.placeholder("float", [None, self._action_size])
-    
-      # temporary difference (R-V) (input for policy)
-      self.td = tf.placeholder("float", [None])
 
-      # avoid NaN with clipping when value in pi becomes zero
-      log_pi = tf.log(tf.clip_by_value(self.pi, 1e-20, 1.0))
-      
-      # policy entropy
-      entropy = -tf.reduce_sum(self.pi * log_pi, reduction_indices=1)
-      
-      # policy loss (output)  (Adding minus, because the original paper's objective function is for gradient ascent, but we use gradient descent optimizer.)
-      policy_loss = - tf.reduce_sum( tf.reduce_sum( tf.multiply( log_pi, self.a ), reduction_indices=1 ) * self.td + entropy * entropy_beta )
+      with tf.name_scope('loss') as loss_scope:
 
-      # R (input for value)
-      self.r = tf.placeholder("float", [None])
-      
-      # value loss (output)
-      # (Learning rate for Critic is half of Actor's, so multiply by 0.5)
-      value_loss = 0.5 * tf.nn.l2_loss(self.r - self.v)
+        # taken action (input for policy)
+        self.a = tf.placeholder("float", [None, self._action_size])
 
-      # model loss (optional, including state model loss and reward model loss)
-      if MODEL_LOSS:
-        print("model_loss on")
+        # temporary difference (R-V) (input for policy)
+        self.td = tf.placeholder("float", [None])
 
-        # next state feature (the flowing state of input state)
-        self.nf = tf.placeholder("float", [None, FEATURE_SIZE])
-
-        # next imagination state
-        # self.imag_nf = tf.placeholder("float", [None, FEATURE_SIZE])
-
-        model_state_loss = 0.5 * tf.nn.l2_loss(self.nf - self.imag_nf)
-
-        model_reward_loss = 0.5 * tf.nn.l2_loss(self.r - self.imag_r)
+        # avoid NaN with clipping when value in pi becomes zero
+        log_pi = tf.log(tf.clip_by_value(self.pi, 1e-20, 1.0))
         
-        model_loss = model_state_loss + model_reward_loss
+        # policy entropy
+        entropy = -tf.reduce_sum(self.pi * log_pi, reduction_indices=1)
+        
+        # policy loss (output)  (Adding minus, because the original paper's objective function is for gradient ascent, but we use gradient descent optimizer.)
+        policy_loss = - tf.reduce_sum( tf.reduce_sum( tf.multiply( log_pi, self.a ), reduction_indices=1 ) * self.td + entropy * entropy_beta )
 
-        # gradienet of policy, value and model are summed up
-        self.total_loss = policy_loss + value_loss + model_loss
+        # R (input for value)
+        self.r = tf.placeholder("float", [None])
+        
+        # value loss (output)
+        # (Learning rate for Critic is half of Actor's, so multiply by 0.5)
+        value_loss = 0.5 * tf.nn.l2_loss(self.r - self.v)
 
-      else:
-        print("model_loss off")
+        # model loss (optional, including state model loss and reward model loss)
+        if MODEL_LOSS:
+          print("model_loss on")
 
-        # gradienet of policy and value are summed up
-        self.total_loss = policy_loss + value_loss
+          # imagination based on current action to train the model (only valid for model loss = true)
+          hidden_h_t = tf.multiply(tf.matmul(self.h_t, self.W_enc), tf.matmul(self.a, self.W_a))
+          self.imag_r = tf.matmul(hidden_h_t, self.W_r) + self.b_r
+          self.imag_nf = tf.nn.relu(tf.matmul(hidden_h_t, self.W_dec) + self.b_dec)
+
+          # next state feature (the flowing state of input state)
+          self.nf = tf.placeholder("float", [None, FEATURE_SIZE])
+
+          # next imagination state
+          # self.imag_nf = tf.placeholder("float", [None, FEATURE_SIZE])
+
+          model_state_loss = 0.5 * tf.nn.l2_loss(self.nf - self.imag_nf)
+
+          model_reward_loss = 0.5 * tf.nn.l2_loss(self.r - self.imag_r)
+          
+          model_loss = model_state_loss + model_reward_loss
+
+          # gradienet of policy, value and model are summed up
+          self.total_loss = policy_loss + value_loss + model_loss
+
+        else:
+          print("model_loss off")
+
+          # gradienet of policy and value are summed up
+          self.total_loss = policy_loss + value_loss
 
   def run_policy_and_value(self, sess, s_t):
     raise NotImplementedError()
@@ -316,7 +325,7 @@ class GameACMBFFNetwork(GameACNetwork):
     GameACNetwork.__init__(self, action_size, thread_index, device)
     print "MBAC FF"
 
-# function parameters
+# Function parameters
     with tf.name_scope('feature_extraction') as feature_scope:
 
         # feature extraction function
@@ -350,12 +359,12 @@ class GameACMBFFNetwork(GameACNetwork):
     # self.g = tf.constant(0., dtype=tf.float32, name='return') # return
     self.gamma = tf.constant(0.99, dtype=tf.float32, name='gamma') # gamma
 
-# network
+# Network
     with tf.name_scope('state_input') as scope:
 
         # state (input)
         self.s = tf.placeholder("float", [None, 84, 84, 4])
-        s_ = tf.tile(self.s, [IMAG_SAMPLES, 1, 1, 1]) # copy state for k times and make them a fake batch
+        # s_ = tf.tile(self.s, [IMAG_SAMPLES, 1, 1, 1]) # copy state for k times and make them a fake batch
 
     # feature extraction
     with tf.name_scope(feature_scope):
@@ -365,17 +374,20 @@ class GameACMBFFNetwork(GameACNetwork):
         h_conv2 = tf.nn.relu(self._conv2d(h_conv1, self.W_conv2, 2) + self.b_conv2)
         h_conv2_flat = tf.reshape(h_conv2, [-1, 2592])
         self.h_t  = tf.nn.relu(tf.matmul(h_conv2_flat, self.W_fc1) + self.b_fc1)     
-
-        # Batch size * samples
-        h_conv1 = tf.nn.relu(self._conv2d(s_,  self.W_conv1, 4) + self.b_conv1)
-        h_conv2 = tf.nn.relu(self._conv2d(h_conv1, self.W_conv2, 2) + self.b_conv2)
-        h_conv2_flat = tf.reshape(h_conv2, [-1, 2592])
-        f_t = tf.nn.relu(tf.matmul(h_conv2_flat, self.W_fc1) + self.b_fc1)
-
+        f_t = tf.tile(self.h_t, [IMAG_SAMPLES, 1]) # copy state for k times and make them a fake batch
+        # print "h_t", self.h_t
+        # print "f_t", f_t
+        # # Batch size * samples
+        # h_conv1 = tf.nn.relu(self._conv2d(s_,  self.W_conv1, 4) + self.b_conv1)
+        # h_conv2 = tf.nn.relu(self._conv2d(h_conv1, self.W_conv2, 2) + self.b_conv2)
+        # h_conv2_flat = tf.reshape(h_conv2, [-1, 2592])
+        # f_t = tf.nn.relu(tf.matmul(h_conv2_flat, self.W_fc1) + self.b_fc1)
 
     with tf.name_scope(imagine_scope):
 
-        # imagination 
+
+
+        # imagination based on policy to evaluate value
         for i in range(IMAG_DEPTH):
             with tf.name_scope(policy_scope):
                 # imagination policy
@@ -390,12 +402,12 @@ class GameACMBFFNetwork(GameACNetwork):
                 r_t = tf.matmul(hidden_f_t, self.W_r) + self.b_r
                 f_t_next = tf.nn.relu(tf.matmul(hidden_f_t, self.W_dec) + self.b_dec)
                 
-                if i == 0:
-                  self.imag_nf = f_t_next
-                  self.imag_r = r_t
-                else:
-                  self.imag_nf = tf.concat([self.imag_nf, f_t_next], axis=0)
-                  self.imag_r =  tf.concat([self.imag_r, r_t], axis=0)
+                # if i == 0:
+                #   self.imag_nf = f_t_next
+                #   self.imag_r = r_t
+                # else:
+                #   self.imag_nf = tf.concat([self.imag_nf, f_t_next], axis=0)
+                #   self.imag_r =  tf.concat([self.imag_r, r_t], axis=0)
 
                 f_t = f_t_next
          
@@ -453,36 +465,35 @@ class GameACMBFFNetwork(GameACNetwork):
             self.W_v, self.b_v,
             self.W_pi, self.b_pi]
 
-# def test():
-#     action_size = 16
-#     net = GameACMBFFNetwork(action_size, -1)
-#     init_op = tf.global_variables_initializer()
-#     net.prepare_loss(1)
+def test():
+    action_size = 16
+    net = GameACMBFFNetwork(action_size, -1)
+    init_op = tf.global_variables_initializer()
+    net.prepare_loss(1)
 
-#     with tf.Session() as sess:
-#         net.count_parameters()
+    with tf.Session() as sess:
+        net.count_parameters()
 
-#         # tensorboard
-#         merged = tf.summary.merge_all()
-#         train_writer = tf.summary.FileWriter('./', sess.graph)
+        # tensorboard
+        merged = tf.summary.merge_all()
+        train_writer = tf.summary.FileWriter('./', sess.graph)
 
-#         state = np.random.rand(10, 84, 84, 4)
+        state = np.random.rand(10, 84, 84, 4)
 
-#         sess.run(init_op)
+        sess.run(init_op)
 
-#         v, sample_returns, imag_f, imag_r = sess.run([net.v, net.sample_returns, net.imag_nf, net.imag_r], feed_dict={net.s:state})
-#         print "sample_returns ", sample_returns
-#         print "value ", v
-#         print "self.imag_nf: ", imag_f.shape
-#         print "self.imag_r: ", imag_r.shape
+        v, sample_returns = sess.run([net.v, net.sample_returns], feed_dict={net.s:state})
+        print "sample_returns ", sample_returns
+        print "value ", v
 
-#         print
 
-#         f = net.run_feature(sess, state)
-#         print "f: ", f.shape
+        print
 
-# if __name__ == "__main__":
-#     test()
+        f = net.run_feature(sess, state)
+        print "f: ", f.shape
+
+if __name__ == "__main__":
+    test()
 
 
 
