@@ -6,7 +6,7 @@ import sys
 # import matplotlib.pyplot as plt
 from game_state import GameState
 from game_state import ACTION_SIZE
-from game_ac_network import GameACFFNetwork, GameACLSTMNetwork, GameACMBFFNetwork
+from game_ac_network import GameACFFNetwork, GameACLSTMNetwork, GameACMBFFNetwork, GameACMBLSTMNetwork
 import tensorflow as tf
 
 from constants import GAMMA
@@ -34,12 +34,15 @@ class A3CTrainingThread(object):
     self.max_global_time_step = max_global_time_step
 
     if USE_LSTM:
-      self.local_network = GameACLSTMNetwork(ACTION_SIZE, thread_index, device)
+      if USE_MODEL:
+        self.local_network = GameACMBLSTMNetwork(ACTION_SIZE, thread_index, device)
+      else:
+        self.local_network = GameACLSTMNetwork(ACTION_SIZE, thread_index, device)
     else:
-      self.local_network = GameACFFNetwork(ACTION_SIZE, thread_index, device)
-
-    if USE_MODEL:
-      self.local_network = GameACMBFFNetwork(ACTION_SIZE, thread_index, device)
+      if USE_MODEL:
+        self.local_network = GameACMBFFNetwork(ACTION_SIZE, thread_index, device)
+      else:
+        self.local_network = GameACFFNetwork(ACTION_SIZE, thread_index, device)
 
     self.local_network.prepare_loss(ENTROPY_BETA)
 
@@ -80,17 +83,33 @@ class A3CTrainingThread(object):
   def choose_action(self, pi_values):
     return np.random.choice(range(len(pi_values)), p=pi_values)
 
+  def _record_score_model_loss_on(self, sess, summary_writer, summary_op, score_input, score, global_t, losses_input, losses):
+    model_state_loss_input, model_reward_loss_input, value_loss_input, policy_loss_input, total_loss_input, entropy_input = losses_input
+    model_state_loss, model_reward_loss, value_loss, policy_loss, total_loss, entropy = losses
+    summary_str = sess.run(summary_op, feed_dict={
+      score_input: score,
+      model_state_loss_input: model_state_loss,
+      model_reward_loss_input: model_reward_loss,
+      value_loss_input: value_loss,
+      policy_loss_input: policy_loss,
+      total_loss_input: total_loss,
+      entropy_input: entropy,
+      })
+    summary_writer.add_summary(summary_str, global_t)
+
+    summary_writer.flush()
+
   def _record_score(self, sess, summary_writer, summary_op, score_input, score, global_t):
     summary_str = sess.run(summary_op, feed_dict={
       score_input: score
-    })
+      })
     summary_writer.add_summary(summary_str, global_t)
     summary_writer.flush()
-    
+
   def set_start_time(self, start_time):
     self.start_time = start_time
 
-  def process(self, sess, global_t, summary_writer, summary_op, score_input):
+  def process(self, sess, global_t, summary_writer, summary_op, score_input, losses_input, losses):
     states = []
     actions = []
     rewards = []
@@ -99,7 +118,6 @@ class A3CTrainingThread(object):
 
     last_state = [] # only useful in learning model
     last_step = []
-
     terminal_end = False
 
     # copy weights from shared to local
@@ -146,8 +164,13 @@ class A3CTrainingThread(object):
         terminal_end = True
         print("score={}".format(self.episode_reward))
 
-        self._record_score(sess, summary_writer, summary_op, score_input,
-                           self.episode_reward, global_t)
+        if MODEL_LOSS:
+          print losses
+          self._record_score_model_loss_on(sess, summary_writer, summary_op, score_input,
+                             self.episode_reward, global_t, losses_input, losses)
+        else:
+          self._record_score(sess, summary_writer, summary_op, score_input,
+                             self.episode_reward, global_t)          
           
         self.episode_reward = 0
         self.game_state.reset()
@@ -210,8 +233,8 @@ class A3CTrainingThread(object):
         batch_R.reverse()
         steps.reverse()
         # print steps
-
-        sess.run( self.apply_gradients,
+        model_state_loss, model_reward_loss, value_loss, policy_loss, total_loss, entropy, _ = sess.run(
+        [self.local_network.model_state_loss,self.local_network.model_reward_loss,self.local_network.value_loss,self.local_network.policy_loss,self.local_network.total_loss, self.local_network.entropy_mean, self.apply_gradients],
                   feed_dict = {
                     self.local_network.s: batch_si,
                     self.local_network.a: batch_a,
@@ -221,16 +244,22 @@ class A3CTrainingThread(object):
                     self.local_network.initial_lstm_state: start_lstm_state,
                     self.local_network.step_size : [len(batch_a)],
                     self.learning_rate_input: cur_learning_rate } )
+        losses = model_state_loss, model_reward_loss, value_loss, policy_loss, total_loss, entropy
+
       else:
         # print steps
-        sess.run( self.apply_gradients,
+        model_state_loss, model_reward_loss, value_loss, policy_loss, total_loss, entropy, _ = sess.run(
+        [self.local_network.model_state_loss,self.local_network.model_reward_loss,self.local_network.value_loss,self.local_network.policy_loss,self.local_network.total_loss, self.local_network.entropy_mean, self.apply_gradients],
                   feed_dict = {
                     self.local_network.s: batch_si,
                     self.local_network.a: batch_a,
                     self.local_network.td: batch_td,
                     self.local_network.r: batch_R,
                     self.local_network.nf: batch_nfi,
-                    self.learning_rate_input: cur_learning_rate} )      
+                    self.learning_rate_input: cur_learning_rate} )    
+        losses = model_state_loss, model_reward_loss, value_loss, policy_loss, total_loss, entropy
+ 
+        # print model_state_loss, model_reward_loss, value_loss, policy_loss, entropy
     else:
       if USE_LSTM:
         batch_si.reverse()
@@ -264,5 +293,6 @@ class A3CTrainingThread(object):
 
     # return advanced local step size
     diff_local_t = self.local_t - start_local_t
-    return diff_local_t
+    # losses = model_state_loss, model_reward_loss, value_loss, policy_loss, total_loss, entropy 
+    return diff_local_t, losses
     

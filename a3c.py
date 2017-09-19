@@ -10,7 +10,7 @@ import time
 
 import tensorflow as tf
 
-from game_ac_network import GameACFFNetwork, GameACLSTMNetwork, GameACMBFFNetwork
+from game_ac_network import GameACFFNetwork, GameACLSTMNetwork, GameACMBFFNetwork, GameACMBLSTMNetwork
 from a3c_training_thread import A3CTrainingThread
 from rmsprop_applier import RMSPropApplier
 
@@ -28,7 +28,7 @@ from constants import GRAD_NORM_CLIP
 from constants import USE_GPU
 from constants import USE_LSTM
 from constants import USE_MODEL
-
+from constants import MODEL_LOSS
 
 def log_uniform(lo, hi, rate):
   log_lo = math.log(lo)
@@ -51,11 +51,15 @@ global_t = 0
 stop_requested = False
 
 if USE_LSTM:
-  global_network = GameACLSTMNetwork(ACTION_SIZE, -1, device)
+  if USE_MODEL:
+    global_network = GameACMBLSTMNetwork(ACTION_SIZE, -1, device)
+  else:
+    global_network = GameACLSTMNetwork(ACTION_SIZE, -1, device)
 else:
-  global_network = GameACFFNetwork(ACTION_SIZE, -1, device)
-if USE_MODEL:
-  global_network = GameACMBFFNetwork(ACTION_SIZE, -1, device)
+  if USE_MODEL:
+    global_network = GameACMBFFNetwork(ACTION_SIZE, -1, device)
+  else:
+    global_network = GameACFFNetwork(ACTION_SIZE, -1, device)
 
 training_threads = []
 
@@ -84,7 +88,22 @@ sess.run(init)
 
 # summary for tensorboard
 score_input = tf.placeholder(tf.int32)
+model_state_loss_input = tf.placeholder(tf.float32)
+model_reward_loss_input = tf.placeholder(tf.float32)
+value_loss_input = tf.placeholder(tf.float32)
+policy_loss_input = tf.placeholder(tf.float32)
+total_loss_input = tf.placeholder(tf.float32)
+entropy_input = tf.placeholder(tf.float32)
+losses_input = model_state_loss_input, model_reward_loss_input, value_loss_input, policy_loss_input, total_loss_input, entropy_input
+
 tf.summary.scalar("score", score_input)
+if MODEL_LOSS:
+  tf.summary.scalar("loss/model/state", model_state_loss_input)
+  tf.summary.scalar("loss/model/reward", model_reward_loss_input)
+  tf.summary.scalar("loss/value", value_loss_input)
+  tf.summary.scalar("loss/policy", policy_loss_input)
+  tf.summary.scalar("loss/total", total_loss_input)
+  tf.summary.scalar("policy_entropy", entropy_input)
 
 summary_op = tf.summary.merge_all()
 summary_writer = tf.summary.FileWriter(LOG_FILE, sess.graph)
@@ -117,14 +136,16 @@ def train_function(parallel_index):
   start_time = time.time() - wall_t
   training_thread.set_start_time(start_time)
 
+  model_state_loss, model_reward_loss, value_loss, policy_loss, total_loss, entropy = 0, 0, 0, 0, 0, 0 # initial losses
+  losses = model_state_loss, model_reward_loss, value_loss, policy_loss, total_loss, entropy 
   while True:
     if stop_requested:
       break
     if global_t > MAX_TIME_STEP:
       break
 
-    diff_global_t = training_thread.process(sess, global_t, summary_writer,
-                                            summary_op, score_input)
+    diff_global_t, losses = training_thread.process(sess, global_t, summary_writer,
+                                            summary_op, score_input, losses_input, losses)
     global_t += diff_global_t
     
     
