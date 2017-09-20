@@ -1,17 +1,17 @@
 
 # MBAC
 
+## Baseline Code
 modified from https://github.com/miyosuda/async_deep_reinforce
 
-run
+## How to run
 ```bash
 python a3c.py
 ```
 
-config agent at constants.py
-config imagination at network_parameter.py
-MBAC network at game_ac_network.py
+## Most related file
+1. Config agent at **constants.py**
+2. Config imagination module at **network_parameter.py**
+3. Main training process and a3c algrithom implemented at **a3c_training_thread.py**
+3. MBAC network at **game_ac_network.py**
 
-# forward port in gcloud
-gcloud compute ssh fei_holly@tensorflow
-gcloud compute ssh --ssh-flag="-N -f -L localhost:12345:localhost:12345" fei_holly@tensorflow
